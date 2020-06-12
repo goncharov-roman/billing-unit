@@ -20,6 +20,7 @@ type Payment struct {
 	ID          primitive.ObjectID `json:"_id,omitempty" bson:"_id,omitempty"`
 	Value       float32            `json:"value,omitempty" bson:"value,omitempty"`
 	Description string             `json:"description,omitempty" bson:"description,omitempty"`
+	CreatedAt   time.Time          `json:"created_at" bson:"created_at"`
 }
 
 type ResponseURL struct {
@@ -179,6 +180,14 @@ func main() {
 	clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
 	client, _ = mongo.Connect(ctx, clientOptions)
 	router := mux.NewRouter()
+	collection := client.Database("billing").Collection("payments")
+	mod := mongo.IndexModel{
+		Keys: bson.M{
+			"created_at": 1,
+		},
+		Options: options.Index().SetExpireAfterSeconds(60 * 60),
+	}
+	collection.Indexes().CreateOne(ctx, mod)
 	router.HandleFunc("/register", AddPayment).Methods("POST")
 	router.HandleFunc("/payments/card/form", ProcessPayment).Methods("GET")
 	router.HandleFunc("/luhn", CheckLuhn).Methods("POST")
