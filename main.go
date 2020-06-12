@@ -185,7 +185,7 @@ func main() {
 		Keys: bson.M{
 			"created_at": 1,
 		},
-		Options: options.Index().SetExpireAfterSeconds(60 * 60),
+		Options: options.Index().SetExpireAfterSeconds(30 * 60),
 	}
 	collection.Indexes().CreateOne(ctx, mod)
 	router.HandleFunc("/register", AddPayment).Methods("POST")
