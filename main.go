@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"net/http"
+	"strconv"
 	"text/template"
 	"time"
 )
@@ -62,7 +64,7 @@ const formTmpl = `
 	<body>
 		Payment Value: {{.Value}}
 		Description: {{.Description}}
-		<form action="/luhn" method="post">
+		<form action="/luhn?value={{.Value}}&description={{.Description}}" method="post">
 			Card Number: <input type="text" name="cardNumber">
 			<input type="submit" value="Pay">
 		</form>
@@ -107,13 +109,68 @@ func IsValid(s string) bool {
 	return sum%10 == 0
 }
 
+type ProcessedPayment struct {
+	ID           primitive.ObjectID `json:"_id,omitempty" bson:"_id,omitempty"`
+	SecretNumber string             `json:"secret_number,omitempty" bson:"secret_number,omitempty"`
+	Value        float32            `json:"value,omitempty" bson:"value,omitempty"`
+	Description  string             `json:"description,omitempty" bson:"description,omitempty"`
+	ProcessedAt  time.Time          `json:"processed_at" bson:"processed_at"`
+}
+
 func CheckLuhn(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "text/html")
 	cardNumber := r.FormValue("cardNumber")
 	if IsValid(cardNumber) {
+		floatValue, _ := strconv.ParseFloat(r.URL.Query().Get("value"), 32)
+		description := r.URL.Query().Get("description")
+		secretNumber := "****" + cardNumber[len(cardNumber)-4:]
+		processedPayment := ProcessedPayment{
+			SecretNumber: secretNumber,
+			Value:        float32(floatValue),
+			Description:  description,
+			ProcessedAt:  time.Now(),
+		}
+		collection := client.Database("billing").Collection("processedPayments")
+		ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+		_, insertErr := collection.InsertOne(ctx, processedPayment)
+		if insertErr != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"message": "` + insertErr.Error() + `"}`))
+			return
+		}
 		w.Write([]byte("Payment is successful!"))
 	} else {
 		w.Write([]byte("Payment is unsuccessful"))
+	}
+}
+
+func GetProcessedPayments(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("content-type", "application/json")
+	var payments []ProcessedPayment
+	collection := client.Database("billing").Collection("processedPayments")
+	ctx, _ := context.WithTimeout(context.Background(), 30*time.Second)
+	cursor, err := collection.Find(ctx, bson.M{})
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"message": "` + err.Error() + `"}`))
+		return
+	}
+	defer cursor.Close(ctx)
+	for cursor.Next(ctx) {
+		var payment ProcessedPayment
+		cursor.Decode(&payment)
+		payments = append(payments, payment)
+	}
+	if err := cursor.Err(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"message": "` + err.Error() + `"}`))
+		return
+	}
+	encodeErr := json.NewEncoder(w).Encode(payments)
+	if encodeErr != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"message": "` + encodeErr.Error() + `"}`))
+		return
 	}
 }
 
@@ -125,5 +182,6 @@ func main() {
 	router.HandleFunc("/register", AddPayment).Methods("POST")
 	router.HandleFunc("/payments/card/form", ProcessPayment).Methods("GET")
 	router.HandleFunc("/luhn", CheckLuhn).Methods("POST")
+	router.HandleFunc("/processed", GetProcessedPayments).Methods("GET")
 	http.ListenAndServe(":12345", router)
 }
